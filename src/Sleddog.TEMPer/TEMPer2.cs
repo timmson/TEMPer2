@@ -1,93 +1,49 @@
 ﻿using System;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using HidLibrary;
+using System.Globalization;
 
 namespace Sleddog.TEMPer
 {
-    public class TEMPer2 : IDisposable
+    public class TEMPer2
     {
         private static readonly int VendorId = 0x0C45;
         private static readonly int ProductId = 0x7401;
 
-        private static readonly byte[] ReadTemperateureCommand = {0x00, 0x01, 0x80, 0x33, 0x01, 0x00, 0x00, 0x00, 0x00};
-        private readonly IHidDevice device;
-        private IDisposable readHandle;
+        private static readonly byte[] ReadTemperateureCommand = { 0x00, 0x01, 0x80, 0x33, 0x01, 0x00, 0x00, 0x00, 0x00 };
 
-        public ISubject<TemperatureReading> InternalSensor { get; private set; }
-        public ISubject<TemperatureReading> ExternalSensor { get; private set; }
-
-        public TEMPer2()
+        public static void Main(String[] args)
         {
             var hidDevices = new HidEnumerator().Enumerate(VendorId, ProductId);
+            IHidDevice device = null;
+            try
+            {
+                device = hidDevices.Single(hd => hd.Capabilities.UsagePage == -256);
+                device.Write(ReadTemperateureCommand);
+                var data = device.Read();
+                while (data.Status != HidDeviceData.ReadStatus.Success) ;
+                device.CloseDevice();
 
-            device = hidDevices.Single(hd => hd.Capabilities.UsagePage == -256);
+                CultureInfo ci = new CultureInfo(System.Threading.Thread.CurrentThread.CurrentCulture.Name);
+                ci.NumberFormat.NumberDecimalSeparator = ".";
+                System.Threading.Thread.CurrentThread.CurrentCulture = ci;
+                
+                Console.Write("{\"in\":" + Convert(data.Data[3], data.Data[4]) + ",\"out\":" + Convert(data.Data[5], data.Data[6]) + "}");
 
-            InternalSensor = new Subject<TemperatureReading>();
-            ExternalSensor = new Subject<TemperatureReading>();
+            }
+            catch (Exception e)
+            {
+                Console.Write("Device is not connected");
+                Console.ReadLine();
+                Environment.Exit(-1);
+            }
         }
 
-        public void ReadTemperatures()
+        private static float Convert(byte t1, byte t2)
         {
-            readHandle = Observable.Interval(TimeSpan.FromSeconds(1))
-                .Subscribe(_ =>
-                {
-                    device.Write(ReadTemperateureCommand);
+            return t1 + (t2 >> 4) / 16f;
 
-                    var data = device.Read();
-
-                    if (data.Status == HidDeviceData.ReadStatus.Success)
-                    {
-                        var internalTemperature = new[] {data.Data[3], data.Data[4]};
-                        var externalTemperature = new[] {data.Data[5], data.Data[6]};
-
-                        InternalSensor.OnNext(ConvertToTempearture(internalTemperature));
-                        ExternalSensor.OnNext(ConvertToTempearture(externalTemperature));
-                    }
-                });
         }
 
-        private TemperatureReading ConvertToTempearture(byte[] values)
-        {
-            if (values.Length != 2)
-            {
-                return TemperatureReading.Failed;
-            }
-
-            if (values[0] == 255)
-            {
-                return TemperatureReading.Disconnected;
-            }
-
-            if (values[0] > 128)
-            {
-                var temperature = -1*(256 - values[0]) + ~(values[1] >> 4)/16f;
-
-                return new TemperatureReading(temperature);
-            }
-            else
-            {
-                var temperature = values[0] + (values[1] >> 4)/16f;
-
-                return new TemperatureReading(temperature);
-            }
-        }
-
-        public void Dispose()
-        {
-            if (readHandle != null)
-            {
-                readHandle.Dispose();
-            }
-
-            if (device != null)
-            {
-                if (device.IsOpen)
-                {
-                    device.CloseDevice();
-                }
-            }
-        }
     }
 }
